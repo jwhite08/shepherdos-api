@@ -1,0 +1,508 @@
+// ShepherdOS — Prisma Schema
+// Multi-tenant PostgreSQL database
+// Each record belongs to an Organization (church)
+
+generator client {
+  provider = "prisma-client-js"
+  engineType = "binary"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Organization (one per church) ───────────────────────────
+// The root of every multi-tenant relationship.
+// Every other table references this via organizationId.
+
+model Organization {
+  id          String   @id @default(cuid())
+  name        String
+  slug        String   @unique   // e.g. "praise-cathedral" — used in URLs
+  logoUrl     String?
+  primaryColor String  @default("#5B2D8E")
+  accentColor  String  @default("#C9A84C")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  users        User[]
+  families     Family[]
+  members      Member[]
+  ministries   Ministry[]
+  subDepartments SubDepartment[]
+  contributions  Contribution[]
+  events         Event[]
+  attendanceLogs AttendanceLog[]
+  eventRegistrations EventRegistration[]
+  budgets        Budget[]
+  portalInvites  PortalInvite[]
+  volunteers     Volunteer[]
+  volunteerSchedules VolunteerSchedule[]
+
+  @@map("organizations")
+}
+
+// ─── User (admin/staff login accounts) ───────────────────────
+// Separate from Member — a User is someone who logs into
+// the admin platform. A Member is a congregant record.
+// One person can be both.
+
+model User {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String
+  passwordHash   String
+  firstName      String
+  lastName       String
+  role           UserRole  @default(STAFF)
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  memberId     String?  @unique
+  member       Member?  @relation(fields: [memberId], references: [id])
+  passwordResetTokens PasswordResetToken[]
+
+  @@unique([organizationId, email])
+  @@map("users")
+}
+
+enum UserRole {
+  SUPER_ADMIN   // ShepherdOS platform admin
+  ADMIN         // Church admin — full access
+  STAFF         // Staff — most access, no billing
+  VOLUNTEER     // Volunteer — limited access
+  MEMBER        // Member portal only
+}
+
+// ─── Family ──────────────────────────────────────────────────
+// Groups members into household units.
+// A family can have many members (adults + children).
+
+model Family {
+  id             String   @id @default(cuid())
+  organizationId String
+  familyName     String   // e.g. "The Johnson Family"
+  address        String?
+  city           String?
+  state          String?
+  zip            String?
+  phone          String?
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  members      Member[]
+
+  @@map("families")
+}
+
+// ─── Member ───────────────────────────────────────────────────
+// A congregation record. Can be an adult or a child.
+// Children have isMinor = true and additional security fields.
+
+model Member {
+  id             String       @id @default(cuid())
+  organizationId String
+  familyId       String?
+  firstName      String
+  lastName       String
+  email          String?
+  phone          String?
+  address        String?
+  city           String?
+  state          String?
+  zip            String?
+  dateOfBirth    DateTime?
+  gender         Gender?
+  maritalStatus  MaritalStatus?
+  memberStatus   MemberStatus @default(ACTIVE)
+  joinDate       DateTime?
+  baptismDate    DateTime?
+  profilePhotoUrl String?
+  notes          String?
+
+  // Minor-specific fields (auto-populated when isMinor = true)
+  isMinor        Boolean   @default(false)
+  allergies      String?   // Free text — e.g. "Peanut allergy, Dairy"
+  medicalNotes   String?   // e.g. "Uses EpiPen, see guardian"
+  guardianName   String?
+  guardianPhone  String?
+  authorizedPickup String? // Comma-separated names authorized for pickup
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  family         Family?         @relation(fields: [familyId], references: [id])
+  user           User?
+  subDepartments MemberSubDepartment[]
+  contributions  Contribution[]
+  attendanceLogs AttendanceLog[]
+  checkIns       CheckIn[]
+  eventRegistrations EventRegistration[]
+  portalInvites  PortalInvite[]
+  volunteerRecords Volunteer[]
+
+  @@unique([organizationId, email])
+  @@map("members")
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  PREFER_NOT_TO_SAY
+}
+
+enum MaritalStatus {
+  SINGLE
+  MARRIED
+  DIVORCED
+  WIDOWED
+  SEPARATED
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  NEW_MEMBER
+  VISITOR
+  TRANSFERRED_OUT
+  DECEASED
+}
+
+// ─── Ministry ─────────────────────────────────────────────────
+// Top-level ministry categories configured during onboarding.
+// e.g. "Children's Ministry", "Worship & Arts"
+
+model Ministry {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  icon           String   @default("⭐")
+  description    String?
+  servesMinors   Boolean  @default(false)
+  isCustom       Boolean  @default(false)
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization   Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  subDepartments SubDepartment[]
+  contributions  Contribution[]
+  events         Event[]
+  volunteers     Volunteer[]
+
+  @@map("ministries")
+}
+
+// ─── SubDepartment ────────────────────────────────────────────
+// Departments within a ministry.
+// e.g. "Nursery", "Sunday School" under "Children's Ministry"
+
+model SubDepartment {
+  id             String   @id @default(cuid())
+  organizationId String
+  ministryId     String
+  name           String
+  ageRangeMin    Int?     // For minor departments — minimum age
+  ageRangeMax    Int?     // For minor departments — maximum age
+  sortOrder      Int      @default(0)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ministry       Ministry     @relation(fields: [ministryId], references: [id], onDelete: Cascade)
+  members        MemberSubDepartment[]
+  checkIns       CheckIn[]
+
+  @@map("sub_departments")
+}
+
+// ─── MemberSubDepartment (join table) ────────────────────────
+// Many-to-many: a member can serve in multiple departments,
+// and a department can have many members.
+
+model MemberSubDepartment {
+  memberId        String
+  subDepartmentId String
+  role            String?   // e.g. "Director", "Volunteer"
+  joinedAt        DateTime  @default(now())
+
+  member          Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  subDepartment   SubDepartment @relation(fields: [subDepartmentId], references: [id], onDelete: Cascade)
+
+  @@id([memberId, subDepartmentId])
+  @@map("member_sub_departments")
+}
+
+// ─── Volunteer ────────────────────────────────────────────────
+// A member's volunteer roster entry for a ministry (distinct from
+// MemberSubDepartment, which tracks general roster/check-in eligibility).
+
+model Volunteer {
+  id             String          @id @default(cuid())
+  organizationId String
+  ministryId     String
+  memberId       String
+  roleTitle      String?         // e.g. "Nursery Volunteer", "Sound Tech"
+  status         VolunteerStatus @default(ACTIVE)
+  notes          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ministry       Ministry     @relation(fields: [ministryId], references: [id], onDelete: Cascade)
+  member         Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  schedules      VolunteerSchedule[]
+
+  @@unique([ministryId, memberId])
+  @@map("volunteers")
+}
+
+enum VolunteerStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// ─── VolunteerSchedule ────────────────────────────────────────
+// A volunteer's assignment to serve on a specific date/shift,
+// optionally tied to a formal Event.
+
+model VolunteerSchedule {
+  id             String         @id @default(cuid())
+  organizationId String
+  volunteerId    String
+  eventId        String?
+  serveDate      DateTime
+  role           String?        // shift-specific role override
+  status         ScheduleStatus @default(SCHEDULED)
+  notes          String?
+  createdAt      DateTime       @default(now())
+  updatedAt      DateTime       @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  volunteer      Volunteer    @relation(fields: [volunteerId], references: [id], onDelete: Cascade)
+  event          Event?       @relation(fields: [eventId], references: [id])
+
+  @@map("volunteer_schedules")
+}
+
+enum ScheduleStatus {
+  SCHEDULED
+  CONFIRMED
+  DECLINED
+  COMPLETED
+}
+
+// ─── Contribution ─────────────────────────────────────────────
+// Financial giving records. Linked to a member (optional —
+// some gifts are anonymous).
+
+model Contribution {
+  id             String           @id @default(cuid())
+  organizationId String
+  memberId       String?
+  ministryId     String?
+  amount         Decimal          @db.Decimal(10, 2)
+  type           ContributionType @default(TITHE)
+  method         PaymentMethod    @default(CASH)
+  date           DateTime         @default(now())
+  notes          String?
+  receiptSent    Boolean          @default(false)
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  // Relations
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member         Member?      @relation(fields: [memberId], references: [id])
+  ministry       Ministry?    @relation(fields: [ministryId], references: [id])
+
+  @@map("contributions")
+}
+
+enum ContributionType {
+  TITHE
+  OFFERING
+  BUILDING_FUND
+  MISSIONS
+  BENEVOLENCE
+  YOUTH_FUND
+  OTHER
+}
+
+enum PaymentMethod {
+  CASH
+  CHECK
+  ONLINE
+  ACH
+  CARD
+  OTHER
+}
+
+// ─── Budget ───────────────────────────────────────────────────
+// Per-category budgeted vs. spent amounts, tracked per fiscal year.
+
+model Budget {
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String
+  icon           String   @default("💰")
+  budgetedAmount Decimal  @db.Decimal(10, 2)
+  spentAmount    Decimal  @db.Decimal(10, 2) @default(0)
+  year           Int
+  notes          String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, category, year])
+  @@map("budgets")
+}
+
+// ─── Event ────────────────────────────────────────────────────
+
+model Event {
+  id             String      @id @default(cuid())
+  organizationId String
+  ministryId     String?
+  title          String
+  description    String?
+  location       String?
+  startDate      DateTime
+  endDate        DateTime?
+  capacity       Int?
+  type           String      @default("General")
+  isRecurring    Boolean     @default(false)
+  recurringRule  String?
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ministry       Ministry?    @relation(fields: [ministryId], references: [id])
+  attendanceLogs AttendanceLog[]
+  registrations EventRegistration[]
+  volunteerSchedules VolunteerSchedule[]
+
+  @@map("events")
+}
+
+// ─── EventRegistration ────────────────────────────────────────
+// Tracks which members are registered for which events.
+// One record per member per event.
+
+model EventRegistration {
+  id             String                   @id @default(cuid())
+  organizationId String
+  eventId        String
+  memberId       String
+  status         EventRegistrationStatus  @default(REGISTERED)
+  notes          String?
+  registeredAt   DateTime                 @default(now())
+  checkedInAt    DateTime?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  event          Event        @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  member         Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, memberId])
+  @@map("event_registrations")
+}
+
+enum EventRegistrationStatus {
+  REGISTERED
+  WAITLISTED
+  CANCELLED
+  ATTENDED
+}
+
+// ─── AttendanceLog ────────────────────────────────────────────
+// General attendance — one record per member per service/event.
+
+model AttendanceLog {
+  id             String   @id @default(cuid())
+  organizationId String
+  memberId       String
+  eventId        String?
+  date           DateTime @default(now())
+  notes          String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member         Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  event          Event?       @relation(fields: [eventId], references: [id])
+
+  @@map("attendance_logs")
+}
+
+// ─── CheckIn (child security) ─────────────────────────────────
+// Secure child check-in records. Separate from general
+// attendance — includes security codes and pickup verification.
+
+model CheckIn {
+  id              String      @id @default(cuid())
+  organizationId  String
+  memberId        String      // The child being checked in
+  subDepartmentId String
+  securityCode    String      // e.g. "PC-4821"
+  checkedInAt     DateTime    @default(now())
+  checkedInBy     String?     // Name of the volunteer who checked them in
+  checkedOutAt    DateTime?
+  checkedOutBy    String?     // Name of person who picked up
+  notes           String?
+
+  member          Member        @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  subDepartment   SubDepartment @relation(fields: [subDepartmentId], references: [id])
+
+  @@map("check_ins")
+}
+
+// ─── PortalInvite ─────────────────────────────────────────────
+// An admin-issued invitation for a member to create their
+// Member Portal account. The emailed link carries `token`.
+
+model PortalInvite {
+  id             String    @id @default(cuid())
+  organizationId String
+  memberId       String
+  email          String
+  token          String    @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member         Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@map("portal_invites")
+}
+
+// ─── PasswordResetToken ───────────────────────────────────────
+// An admin-issued (or future self-service) password reset link
+// for an existing Member Portal (or admin) User account.
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("password_reset_tokens")
+}

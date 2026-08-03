@@ -1,0 +1,38 @@
+PS C:\windows\system32> choco install nodejs --version="22.22.2"
+Chocolatey v2.6.0
+Chocolatey detected you are not running from an elevated command shell
+ (cmd/powershell).
+
+ You may experience errors - many functions/packages
+ require admin rights. Only advanced users should run choco w/out an
+ elevated shell. When you open the command shell, you should ensure
+ that you do so with "Run as Administrator" selected. If you are
+ attempting to use Chocolatey in a non-administrator setting, you
+ must select a different location other than the default install
+ location. See
+ https://docs.chocolatey.org/en-us/choco/setup#non-administrative-install
+ for details.
+
+
+ Do you want to continue?([Y]es/[N]o): Y
+
+Installing the following packages:
+nodejs
+By installing, you accept licenses for the packages.
+Downloading package from source 'https://community.chocolatey.org/api/v2/'
+Progress: Downloading nodejs.install 22.22.2... 100%
+nodejs.install not installed. An error occurred during installation:
+ Unable to obtain lock file access on 'C:\ProgramData\chocolatey\lib\80b5db4ae59a27a4e5a98bc869b3316f892f2838' for operations on 'C:\ProgramData\chocolatey\lib\nodejs.install'. This may mean that a different user or administrator is holding this lock and that this process does not have permission to access it. If no other process is currently performing an operation on this file it may mean that an earlier NuGet process crashed and left an inaccessible lock file, in this case removing the file 'C:\ProgramData\chocolatey\lib\80b5db4ae59a27a4e5a98bc869b3316f892f2838' will allow NuGet to continue.
+nodejs.install package files install failed with exit code 1. Performing other installation steps.
+The install of nodejs.install was NOT successful.
+nodejs.install not installed. An error occurred during installation:
+ Unable to obtain lock file access on 'C:\ProgramData\chocolatey\lib\80b5db4ae59a27a4e5a98bc869b3316f892f2838' for operations on 'C:\ProgramData\chocolatey\lib\nodejs.install'. This may mean that a different user or administrator is holding this lock and that this process does not have permission to access it. If no other process is currently performing an operation on this file it may mean that an earlier NuGet process crashed and left an inaccessible lock file, in this case removing the file 'C:\ProgramData\chocolatey\lib\80b5db4ae59a27a4e5a98bc869b3316f892f2838' will allow NuGet to continue.
+Failed to install nodejs because a previous dependency failed.
+
+Chocolatey installed 0/2 packages. 2 packages failed.
+ See the log for details (C:\ProgramData\chocolatey\logs\chocolatey.log).
+
+Failures
+ - nodejs - Failed to install nodejs because a previous dependency failed.
+ - nodejs.install (exited 1) - nodejs.install not installed. An error occurred during installation:
+ Unable to obtain lock file access on 'C:\ProgramData\chocolatey\lib\80b5db4ae59a27a4e5a98bc869b3316f892f2838' for operations on 'C:\ProgramData\chocolatey\lib\nodejs.install'. This may mean that a different user or administrator is holding this lock and that this process does not have permission to access it. If no other process is currently performing an operation on this file it may mean that an earlier NuGet process crashed and left an inaccessible lock file, in this case removing the file 'C:\ProgramData\chocolatey\lib\80b5db4ae59a27a4e5a98bc869b3316f892f2838' will allow NuGet to continue.
