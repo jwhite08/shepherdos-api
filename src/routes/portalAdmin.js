@@ -15,16 +15,20 @@ import {
 } from "../controllers/portalAdmin.controller.js";
 
 const router = Router();
-router.use(requireAuth, requireRole("ADMIN", "STAFF"));
+router.use(requireAuth);
 
-router.get(  "/overview", getOverview);
-router.get(  "/members",  getMembers);
+router.get(  "/overview", requireRole("ADMIN", "STAFF"), getOverview);
+router.get(  "/members",  requireRole("ADMIN", "STAFF"), getMembers);
 
-router.post( "/members/:memberId/invite",         inviteMember);
-router.post( "/members/:memberId/reset-password", resetPassword);
-router.patch("/members/:memberId/access",          setAccess);
+// Invite emails and password resets hand out portal credentials directly,
+// so these are admin-only — tighter than the ADMIN/STAFF default for the
+// rest of this file. A STAFF-visible UI option must never rely solely on
+// the frontend hiding it; the API enforces this independently.
+router.post( "/members/:memberId/invite",         requireRole("ADMIN", "SUPER_ADMIN"), inviteMember);
+router.post( "/members/:memberId/reset-password", requireRole("ADMIN", "SUPER_ADMIN"), resetPassword);
+router.patch("/members/:memberId/access",          requireRole("ADMIN", "STAFF"), setAccess);
 
-router.post( "/bulk-invite", bulkInvite);
-router.post( "/bulk-access", bulkSetAccess);
+router.post( "/bulk-invite", requireRole("ADMIN", "STAFF"), bulkInvite);
+router.post( "/bulk-access", requireRole("ADMIN", "STAFF"), bulkSetAccess);
 
 export default router;
