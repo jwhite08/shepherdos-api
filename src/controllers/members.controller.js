@@ -96,6 +96,7 @@ export async function getMemberById(req, res) {
       attendanceLogs: {
         orderBy: { date: "desc" },
         take: 5,
+        include: { event: { select: { title: true } } },
       },
     },
   });
