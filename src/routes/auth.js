@@ -92,6 +92,55 @@ router.post("/login", async (req, res) => {
   }
 });
 
+// POST /api/auth/accept-invite
+// Consumes an admin-issued StaffInvite token to create the staff/admin
+// account (mirrors POST /api/member-auth/accept-invite for the portal).
+router.post("/accept-invite", async (req, res) => {
+  const { token, password } = req.body;
+
+  if (!token)               return res.status(400).json({ error: "Invite token is required." });
+  if (!password)            return res.status(400).json({ error: "Password is required." });
+  if (password.length < 8)  return res.status(400).json({ error: "Password must be at least 8 characters." });
+
+  const invite = await prisma.staffInvite.findUnique({ where: { token } });
+
+  if (!invite)                        return res.status(404).json({ error: "This invite link is invalid." });
+  if (invite.usedAt)                  return res.status(409).json({ error: "This invite has already been used. Please sign in." });
+  if (invite.expiresAt < new Date())  return res.status(410).json({ error: "This invite link has expired. Ask your administrator to resend it." });
+
+  const existingUser = await prisma.user.findFirst({ where: { organizationId: invite.organizationId, email: invite.email } });
+  if (existingUser) return res.status(409).json({ error: "An account with this email already exists. Please sign in." });
+
+  const passwordHash = await bcrypt.hash(password, 10);
+  const grants = (invite.ministryGrants || []).map(g => ({ ministryId: g.ministryId, accessLevel: g.accessLevel }));
+
+  const [user] = await prisma.$transaction([
+    prisma.user.create({
+      data: {
+        organizationId: invite.organizationId,
+        email:          invite.email,
+        passwordHash,
+        firstName:      invite.firstName,
+        lastName:       invite.lastName,
+        role:           invite.role,
+        canViewFinance: invite.canViewFinance,
+        lastLoginAt:    new Date(),
+        ...(grants.length && { ministryAccess: { create: grants } }),
+      },
+      include: AUTH_USER_INCLUDE,
+    }),
+    prisma.staffInvite.update({ where: { id: invite.id }, data: { usedAt: new Date() } }),
+  ]);
+
+  const jwtToken = jwt.sign(
+    { userId: user.id, organizationId: user.organizationId, role: user.role, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+  );
+
+  res.status(201).json({ token: jwtToken, user: serializeUser(user) });
+});
+
 // GET /api/auth/me — returns current user from token
 router.get("/me", async (req, res) => {
   const authHeader = req.headers.authorization;

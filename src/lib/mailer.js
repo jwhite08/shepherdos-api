@@ -37,6 +37,18 @@ export function portalInviteEmail({ orgName, memberFirstName, link }) {
   };
 }
 
+export function staffInviteEmail({ orgName, firstName, link }) {
+  return {
+    subject: `You're invited to join ${orgName} on ShepherdOS`,
+    html: `
+      <p>Hi ${firstName},</p>
+      <p>${orgName} has invited you to join their ShepherdOS staff platform.</p>
+      <p><a href="${link}">Click here to set up your account</a></p>
+      <p>This link expires in 7 days.</p>
+    `,
+  };
+}
+
 export function passwordResetEmail({ orgName, memberFirstName, link }) {
   return {
     subject: `Reset your ${orgName} Member Portal password`,

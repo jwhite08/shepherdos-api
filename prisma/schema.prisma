@@ -41,6 +41,7 @@ model Organization {
   volunteers     Volunteer[]
   volunteerSchedules VolunteerSchedule[]
   memberPhotos   MemberPhoto[]
+  staffInvites   StaffInvite[]
 
   @@map("organizations")
 }
@@ -114,6 +115,36 @@ enum UserRole {
   STAFF         // Staff — most access, no billing
   VOLUNTEER     // Volunteer — limited access
   MEMBER        // Member portal only
+}
+
+// ─── StaffInvite ──────────────────────────────────────────────
+// An admin-issued invitation for a new staff/admin User account.
+// Distinct from PortalInvite: that one is issued against an existing
+// Member row, this one has no Member behind it — it's how a User
+// row comes to exist at all before someone with an org login exists
+// to run the seed script.
+//
+// The desired role/finance/ministry grants are captured at invite time
+// and applied when the invite is accepted, rather than defaulting a new
+// account to STAFF-with-no-access and making the admin edit it twice.
+
+model StaffInvite {
+  id             String    @id @default(cuid())
+  organizationId String
+  email          String
+  firstName      String
+  lastName       String
+  role           UserRole
+  canViewFinance Boolean   @default(false)
+  ministryGrants Json      @default("[]") // [{ ministryId, accessLevel }]
+  token          String    @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("staff_invites")
 }
 
 // ─── Family ──────────────────────────────────────────────────

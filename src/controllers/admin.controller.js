@@ -4,11 +4,36 @@
 // Every route using this controller is restricted to ADMIN / SUPER_ADMIN
 // at the router level — see routes/admin.js.
 
+import crypto from "crypto";
 import prisma from "../lib/prisma.js";
 import { GLOBAL_ROLES } from "../lib/scope.js";
+import { sendMail, staffInviteEmail } from "../lib/mailer.js";
 
 const VALID_ROLES  = ["SUPER_ADMIN", "ADMIN", "STAFF", "VOLUNTEER", "MEMBER"];
 const VALID_LEVELS = ["VIEW", "MANAGE"];
+const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
+
+function frontendUrl() { return process.env.FRONTEND_URL || "http://localhost:3000"; }
+
+function validateAccessFields({ role, canViewFinance, ministryAccess }, actingRole) {
+  if (role !== undefined) {
+    if (!VALID_ROLES.includes(role)) {
+      return `Role must be one of: ${VALID_ROLES.join(", ")}.`;
+    }
+    // Only a SUPER_ADMIN may mint another SUPER_ADMIN.
+    if (role === "SUPER_ADMIN" && actingRole !== "SUPER_ADMIN") {
+      return "Only a super administrator can grant that role.";
+    }
+  }
+  if (ministryAccess !== undefined) {
+    if (!Array.isArray(ministryAccess)) return "ministryAccess must be an array.";
+    for (const g of ministryAccess) {
+      if (!g?.ministryId) return "Each grant needs a ministryId.";
+      if (!VALID_LEVELS.includes(g.accessLevel)) return `accessLevel must be one of: ${VALID_LEVELS.join(", ")}.`;
+    }
+  }
+  return null;
+}
 
 // ─── GET /api/admin/users ─────────────────────────────────────
 // Staff accounts with their current role and ministry grants.
@@ -154,4 +179,103 @@ export async function setUserAccess(req, res) {
       accessLevel: a.accessLevel,
     })),
   });
+}
+
+// ─── POST /api/admin/users/invite ─────────────────────────────
+// Creates a pending StaffInvite and emails a "set up your account" link.
+// No User row exists yet — accepting the invite (POST /api/auth/accept-invite)
+// is what actually creates it, the same way PortalInvite works for members.
+export async function inviteUser(req, res) {
+  const { organizationId } = req.user;
+  const { email, firstName, lastName, role, canViewFinance, ministryAccess = [] } = req.body;
+
+  if (!email || !firstName || !lastName) {
+    return res.status(400).json({ error: "Email, first name, and last name are required." });
+  }
+  if (!role) return res.status(400).json({ error: "Role is required." });
+
+  const validationError = validateAccessFields({ role, canViewFinance, ministryAccess }, req.user.role);
+  if (validationError) return res.status(400).json({ error: validationError });
+
+  const normalizedEmail = email.toLowerCase().trim();
+
+  const existingUser = await prisma.user.findFirst({ where: { organizationId, email: normalizedEmail } });
+  if (existingUser) return res.status(409).json({ error: "A user with this email already exists." });
+
+  const existingInvite = await prisma.staffInvite.findFirst({
+    where: { organizationId, email: normalizedEmail, usedAt: null, expiresAt: { gt: new Date() } },
+  });
+  if (existingInvite) return res.status(409).json({ error: "An invite is already pending for this email." });
+
+  if (ministryAccess.length) {
+    // Confirm every ministry belongs to this organization — otherwise an
+    // admin could grant access to another church's ministry by id.
+    const ids = [...new Set(ministryAccess.map(g => g.ministryId))];
+    const found = await prisma.ministry.findMany({ where: { id: { in: ids }, organizationId }, select: { id: true } });
+    if (found.length !== ids.length) return res.status(400).json({ error: "One or more ministries were not found." });
+  }
+
+  const organization = await prisma.organization.findUnique({ where: { id: organizationId } });
+
+  const token     = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
+
+  await prisma.staffInvite.create({
+    data: {
+      organizationId, email: normalizedEmail, firstName, lastName, role,
+      canViewFinance: Boolean(canViewFinance), ministryGrants: ministryAccess,
+      token, expiresAt,
+    },
+  });
+
+  const link = `${frontendUrl()}/?invite=${token}`;
+  const { subject, html } = staffInviteEmail({ orgName: organization.name, firstName, link });
+  await sendMail({ to: normalizedEmail, subject, html });
+
+  res.status(201).json({ message: `Invite sent to ${normalizedEmail}.`, expiresAt });
+}
+
+// ─── GET /api/admin/invites ────────────────────────────────────
+// Pending (unused, unexpired) staff invites, so an admin can see who
+// hasn't accepted yet instead of guessing from a silent inbox.
+export async function listInvites(req, res) {
+  const { organizationId } = req.user;
+  const invites = await prisma.staffInvite.findMany({
+    where: { organizationId, usedAt: null, expiresAt: { gt: new Date() } },
+    orderBy: { createdAt: "desc" },
+    select: { id: true, email: true, firstName: true, lastName: true, role: true, expiresAt: true, createdAt: true },
+  });
+  res.json({ invites });
+}
+
+// ─── DELETE /api/admin/invites/:id ─────────────────────────────
+export async function revokeInvite(req, res) {
+  const { organizationId } = req.user;
+  const { id } = req.params;
+
+  const invite = await prisma.staffInvite.findFirst({ where: { id, organizationId } });
+  if (!invite) return res.status(404).json({ error: "Invite not found." });
+
+  await prisma.staffInvite.delete({ where: { id } });
+  res.json({ message: "Invite revoked." });
+}
+
+// ─── PATCH /api/admin/users/:id/active ─────────────────────────
+export async function setUserActive(req, res) {
+  const { organizationId, userId: actingUserId } = req.user;
+  const { id } = req.params;
+  const { isActive } = req.body;
+
+  if (typeof isActive !== "boolean") return res.status(400).json({ error: "isActive (boolean) is required." });
+  // Guard against an admin locking themselves out of the org's own
+  // access-control screen.
+  if (id === actingUserId && !isActive) {
+    return res.status(400).json({ error: "You cannot deactivate your own account." });
+  }
+
+  const target = await prisma.user.findFirst({ where: { id, organizationId } });
+  if (!target) return res.status(404).json({ error: "User not found." });
+
+  const updated = await prisma.user.update({ where: { id }, data: { isActive } });
+  res.json({ message: isActive ? "Account reactivated." : "Account deactivated.", isActive: updated.isActive });
 }
