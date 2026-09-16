@@ -4,6 +4,7 @@
 //   2. Child secure check-in  → CheckIn records with security codes
 
 import prisma from "../lib/prisma.js";
+import { ministryFilter, nestedMinistryFilter, canManageMinistry } from "../lib/scope.js";
 
 // ─── Helper: generate a unique security code ─────────────────
 function generateSecurityCode(orgName) {
@@ -214,7 +215,11 @@ export async function getDepartmentCounts(req, res) {
 
   // Get all minor-serving departments
   const ministries = await prisma.ministry.findMany({
-    where: { organizationId, servesMinors: true },
+    where: {
+      organizationId,
+      servesMinors: true,
+      ...ministryFilter(req.scope, { field: "id" }),
+    },
     include: {
       subDepartments: {
         include: {
@@ -260,6 +265,11 @@ export async function checkInChild(req, res) {
 
   if (!member) return res.status(404).json({ error: "Child not found." });
   if (!subDept) return res.status(404).json({ error: "Department not found." });
+
+  // A user may only check children into classrooms in ministries they manage.
+  if (!canManageMinistry(req.scope, subDept.ministryId)) {
+    return res.status(403).json({ error: "You do not have permission to check children into this department." });
+  }
 
   // Check if already checked in today
   const existing = await prisma.checkIn.findFirst({
@@ -360,8 +370,15 @@ export async function checkOutChild(req, res) {
 export async function getActiveCheckIns(req, res) {
   const { organizationId } = req.user;
 
+  // Child check-in records carry allergies and medical notes, so scoped
+  // users see only the classrooms in ministries they've been granted.
   const checkIns = await prisma.checkIn.findMany({
-    where: { organizationId, checkedInAt: todayRange(), checkedOutAt: null },
+    where: {
+      organizationId,
+      checkedInAt: todayRange(),
+      checkedOutAt: null,
+      ...nestedMinistryFilter(req.scope, "subDepartment"),
+    },
     include: {
       member: {
         select: {

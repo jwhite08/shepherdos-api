@@ -58,6 +58,10 @@ model User {
   lastName       String
   role           UserRole  @default(STAFF)
   isActive       Boolean   @default(true)
+  // Finance visibility is an explicit grant rather than a role, because
+  // UserRole can't distinguish a finance staffer from a children's ministry
+  // staffer — both are STAFF. Fails closed: no flag, no giving data.
+  canViewFinance Boolean   @default(false)
   lastLoginAt    DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -67,9 +71,40 @@ model User {
   memberId     String?  @unique
   member       Member?  @relation(fields: [memberId], references: [id])
   passwordResetTokens PasswordResetToken[]
+  ministryAccess UserMinistryAccess[]
 
   @@unique([organizationId, email])
   @@map("users")
+}
+
+// ─── UserMinistryAccess ───────────────────────────────────────
+// Scopes a staff/volunteer user to specific ministries.
+//
+// ADMIN and SUPER_ADMIN ignore this table entirely — they see the
+// whole organization. For everyone else, an empty set of rows means
+// no ministry-scoped data at all (fail closed, never fail open).
+//
+// This is deliberately separate from Volunteer / MemberSubDepartment:
+// those describe congregant roster membership, this describes system
+// authorization. Adding someone to the nursery roster must never
+// silently grant them access to nursery data in the admin app.
+
+model UserMinistryAccess {
+  userId      String
+  ministryId  String
+  accessLevel MinistryAccessLevel @default(VIEW)
+  grantedAt   DateTime            @default(now())
+
+  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ministry Ministry @relation(fields: [ministryId], references: [id], onDelete: Cascade)
+
+  @@id([userId, ministryId])
+  @@map("user_ministry_access")
+}
+
+enum MinistryAccessLevel {
+  VIEW    // Read the ministry's data
+  MANAGE  // Read and modify the ministry's data
 }
 
 enum UserRole {
@@ -202,6 +237,8 @@ model Ministry {
   contributions  Contribution[]
   events         Event[]
   volunteers     Volunteer[]
+  budgets        Budget[]
+  userAccess     UserMinistryAccess[]
 
   @@map("ministries")
 }
@@ -357,6 +394,9 @@ enum PaymentMethod {
 model Budget {
   id             String   @id @default(cuid())
   organizationId String
+  // Null = an organization-wide line (e.g. "Staff Salaries").
+  // Ministry-scoped users never see untagged budget lines.
+  ministryId     String?
   category       String
   icon           String   @default("💰")
   budgetedAmount Decimal  @db.Decimal(10, 2)
@@ -367,8 +407,14 @@ model Budget {
   updatedAt      DateTime @updatedAt
 
   organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  ministry       Ministry?    @relation(fields: [ministryId], references: [id])
 
-  @@unique([organizationId, category, year])
+  // Category names must now be unique per ministry, not per org — otherwise
+  // Children's and Youth couldn't both have a "Supplies" line.
+  // Caveat: Postgres treats NULLs as distinct, so this does NOT prevent
+  // duplicate org-wide (ministryId = null) categories. The create/update
+  // controllers check for that case explicitly.
+  @@unique([organizationId, ministryId, category, year])
   @@map("budgets")
 }
 

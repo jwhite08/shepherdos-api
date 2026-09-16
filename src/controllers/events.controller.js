@@ -2,6 +2,7 @@
 // Handles event CRUD, registration management, and attendance marking.
 
 import prisma from "../lib/prisma.js";
+import { ministryFilter, canViewMinistry, assertCanManage } from "../lib/scope.js";
 
 const EVENT_TYPES = ["Worship","Study","Youth","Conference","Fellowship","Training","Outreach","General"];
 
@@ -22,6 +23,10 @@ export async function getEvents(req, res) {
   const skip = (parseInt(page) - 1) * parseInt(limit);
   const now  = new Date();
 
+  // Events with no ministryId are church-wide and visible to everyone;
+  // ministry-tagged events are restricted to users granted that ministry.
+  const scopeFilter = ministryFilter(req.scope, { includeUntagged: true });
+
   const where = {
     organizationId,
     ...(type       && { type }),
@@ -29,6 +34,8 @@ export async function getEvents(req, res) {
     ...(search && { title: { contains: search, mode: "insensitive" } }),
     ...(upcoming === "true" && { startDate: { gte: now } }),
     ...(past     === "true" && { startDate: { lt:  now } }),
+    // Spread last so the scope filter can't be overridden by a query param.
+    ...scopeFilter,
   };
 
   const [events, total] = await Promise.all([
@@ -64,8 +71,14 @@ export async function getEventById(req, res) {
   const { organizationId } = req.user;
   const { id } = req.params;
 
+  // Scope is applied to the lookup itself rather than after fetching, so an
+  // out-of-scope id is indistinguishable from a nonexistent one.
   const event = await prisma.event.findFirst({
-    where: { id, organizationId },
+    where: {
+      id,
+      organizationId,
+      ...ministryFilter(req.scope, { includeUntagged: true }),
+    },
     include: {
       registrations: {
         include: {
@@ -136,6 +149,12 @@ export async function updateEvent(req, res) {
   const existing = await prisma.event.findFirst({ where: { id, organizationId } });
   if (!existing) return res.status(404).json({ error: "Event not found." });
 
+  // Editing requires MANAGE on the event's ministry. Church-wide events
+  // (no ministryId) are admin-only, which canManageMinistry already enforces
+  // by returning false for a null ministry.
+  const updateError = assertCanManage(req.scope, existing.ministryId);
+  if (updateError) return res.status(403).json({ error: updateError });
+
   const {
     title, description, location,
     startDate, endDate, capacity,
@@ -178,6 +197,9 @@ export async function deleteEvent(req, res) {
   const existing = await prisma.event.findFirst({ where: { id, organizationId } });
   if (!existing) return res.status(404).json({ error: "Event not found." });
 
+  const deleteError = assertCanManage(req.scope, existing.ministryId);
+  if (deleteError) return res.status(403).json({ error: deleteError });
+
   await prisma.event.delete({ where: { id } });
   res.json({ message: "Event deleted." });
 }
@@ -187,7 +209,9 @@ export async function getRegistrations(req, res) {
   const { organizationId } = req.user;
   const { id } = req.params;
 
-  const event = await prisma.event.findFirst({ where: { id, organizationId } });
+  const event = await prisma.event.findFirst({
+    where: { id, organizationId, ...ministryFilter(req.scope, { includeUntagged: true }) },
+  });
   if (!event) return res.status(404).json({ error: "Event not found." });
 
   const registrations = await prisma.eventRegistration.findMany({
@@ -213,7 +237,10 @@ export async function registerMember(req, res) {
   if (!memberId) return res.status(400).json({ error: "memberId is required." });
 
   const [event, member] = await Promise.all([
-    prisma.event.findFirst({ where: { id: eventId, organizationId }, include: { _count: { select: { registrations: true } } } }),
+    prisma.event.findFirst({
+      where: { id: eventId, organizationId, ...ministryFilter(req.scope, { includeUntagged: true }) },
+      include: { _count: { select: { registrations: true } } },
+    }),
     prisma.member.findFirst({ where: { id: memberId, organizationId } }),
   ]);
 

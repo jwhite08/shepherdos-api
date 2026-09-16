@@ -1,5 +1,6 @@
 // src/controllers/finance.controller.js
 import prisma from "../lib/prisma.js";
+import { ministryFilter, canManageMinistry, assertCanManage } from "../lib/scope.js";
 
 const VALID_TYPES   = ["TITHE","OFFERING","BUILDING_FUND","MISSIONS","BENEVOLENCE","YOUTH_FUND","OTHER"];
 const VALID_METHODS = ["CASH","CHECK","ONLINE","ACH","CARD","OTHER"];
@@ -252,8 +253,16 @@ export async function getBudgets(req, res) {
   const { organizationId } = req.user;
   const { year = new Date().getFullYear() } = req.query;
 
+  // Ministry-scoped users see only their ministries' budget lines.
+  // includeUntagged stays false on purpose: an untagged budget is an
+  // org-wide line (staff salaries, insurance) and is privileged.
   const budgets = await prisma.budget.findMany({
-    where: { organizationId, year: parseInt(year) },
+    where: {
+      organizationId,
+      year: parseInt(year),
+      ...ministryFilter(req.scope),
+    },
+    include: { ministry: { select: { id: true, name: true, icon: true } } },
     orderBy: { category: "asc" },
   });
 
@@ -266,19 +275,31 @@ export async function getBudgets(req, res) {
 // ─── POST /api/finance/budgets ────────────────────────────────
 export async function createBudget(req, res) {
   const { organizationId } = req.user;
-  const { category, icon, budgetedAmount, spentAmount, year, notes } = req.body;
+  const { category, icon, budgetedAmount, spentAmount, year, notes, ministryId = null } = req.body;
 
   if (!category?.trim())  return res.status(400).json({ error: "Category name is required." });
   if (!budgetedAmount || isNaN(parseFloat(budgetedAmount))) return res.status(400).json({ error: "A valid budgeted amount is required." });
 
+  // Only global roles may create org-wide (untagged) budget lines.
+  const manageError = assertCanManage(req.scope, ministryId);
+  if (manageError) return res.status(403).json({ error: manageError });
+
+  if (ministryId) {
+    const ministry = await prisma.ministry.findFirst({ where: { id: ministryId, organizationId } });
+    if (!ministry) return res.status(400).json({ error: "Ministry not found." });
+  }
+
+  // Postgres treats NULLs as distinct, so the composite unique index does not
+  // catch duplicate org-wide categories — check explicitly.
   const existing = await prisma.budget.findFirst({
-    where: { organizationId, category: category.trim(), year: parseInt(year) || new Date().getFullYear() },
+    where: { organizationId, ministryId, category: category.trim(), year: parseInt(year) || new Date().getFullYear() },
   });
   if (existing) return res.status(409).json({ error: `A budget category named "${category}" already exists for ${year}.` });
 
   const budget = await prisma.budget.create({
     data: {
       organizationId,
+      ministryId,
       category: category.trim(),
       icon: icon || "💰",
       budgetedAmount: parseFloat(budgetedAmount),
@@ -298,6 +319,9 @@ export async function updateBudget(req, res) {
 
   const existing = await prisma.budget.findFirst({ where: { id, organizationId } });
   if (!existing) return res.status(404).json({ error: "Budget category not found." });
+
+  const manageError = assertCanManage(req.scope, existing.ministryId);
+  if (manageError) return res.status(403).json({ error: manageError });
 
   const { category, icon, budgetedAmount, spentAmount, notes } = req.body;
 
@@ -322,6 +346,9 @@ export async function deleteBudget(req, res) {
 
   const existing = await prisma.budget.findFirst({ where: { id, organizationId } });
   if (!existing) return res.status(404).json({ error: "Budget category not found." });
+
+  const manageError = assertCanManage(req.scope, existing.ministryId);
+  if (manageError) return res.status(403).json({ error: manageError });
 
   await prisma.budget.delete({ where: { id } });
   res.json({ message: "Budget category deleted." });

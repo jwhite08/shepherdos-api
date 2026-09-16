@@ -2,6 +2,7 @@
 
 import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { attachScope } from "../lib/scope.js";
 import {
   getEvents,
   getEventById,
@@ -16,7 +17,7 @@ import {
 } from "../controllers/events.controller.js";
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, attachScope);
 
 // ─── Event CRUD ───────────────────────────────────────────────
 router.get( "/types",           getEventTypes);

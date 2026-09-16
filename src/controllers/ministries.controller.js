@@ -4,13 +4,16 @@
 // controllers via an optional ministryId filter — not duplicated here.
 
 import prisma from "../lib/prisma.js";
+import { ministryFilter } from "../lib/scope.js";
 
 // ─── GET /api/ministries ──────────────────────────────────────
 export async function getMinistries(req, res) {
   const { organizationId } = req.user;
 
+  // Scoped users only see the ministries they've been granted. This also
+  // drives the sidebar nav, so they never see links they can't open.
   const ministries = await prisma.ministry.findMany({
-    where: { organizationId },
+    where: { organizationId, ...ministryFilter(req.scope, { field: "id" }) },
     orderBy: { sortOrder: "asc" },
     include: {
       subDepartments: { orderBy: { sortOrder: "asc" } },

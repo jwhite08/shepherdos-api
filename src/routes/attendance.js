@@ -2,6 +2,7 @@
 
 import { Router } from "express";
 import { requireAuth, requireRole } from "../middleware/auth.js";
+import { attachScope } from "../lib/scope.js";
 import {
   getAttendance,
   getAttendanceStats,
@@ -15,7 +16,7 @@ import {
 } from "../controllers/attendance.controller.js";
 
 const router = Router();
-router.use(requireAuth);
+router.use(requireAuth, attachScope);
 
 // ─── Adult Attendance ─────────────────────────────────────────
 router.get( "/",              getAttendance);

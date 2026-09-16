@@ -45,6 +45,7 @@ async function main() {
       firstName: "Church",
       lastName: "Admin",
       role: "ADMIN",
+      canViewFinance: true,
     },
   });
   console.log(`✓ Admin user: ${adminUser.email} (password: admin1234)`);
@@ -317,6 +318,58 @@ async function main() {
     }
   }
   console.log(`✓ ${contributionData.length} contributions seeded`);
+  // ── Scoped Test Users ────────────────────────────────────────
+  // Two accounts for exercising ministry-scoped access control.
+  const scopedUsers = [
+    {
+      email: "children@praisecathedral.org",
+      firstName: "Casey", lastName: "Childers",
+      role: "STAFF",
+      canViewFinance: false,
+      grants: [{ ministry: "Children's Ministry", accessLevel: "MANAGE" }],
+      note: "Children's Ministry only — no finance access",
+    },
+    {
+      email: "finance@praisecathedral.org",
+      firstName: "Dana", lastName: "Ledger",
+      role: "STAFF",
+      canViewFinance: true,
+      grants: [],
+      note: "Finance access, no ministry data",
+    },
+  ];
+
+  for (const su of scopedUsers) {
+    const u = await prisma.user.create({
+      data: {
+        organizationId: org.id,
+        email: su.email,
+        passwordHash,
+        firstName: su.firstName,
+        lastName: su.lastName,
+        role: su.role,
+        canViewFinance: su.canViewFinance,
+      },
+    });
+
+    for (const g of su.grants) {
+      if (!ministryMap[g.ministry]) continue;
+      await prisma.userMinistryAccess.create({
+        data: { userId: u.id, ministryId: ministryMap[g.ministry], accessLevel: g.accessLevel },
+      });
+    }
+    console.log(`✓ Test user: ${su.email} (password: admin1234) — ${su.note}`);
+  }
+
+  // Tag a couple of budget lines to a ministry so scoping is observable.
+  const childrensId = ministryMap["Children's Ministry"];
+  if (childrensId) {
+    await prisma.budget.updateMany({
+      where: { organizationId: org.id, category: { in: ["Youth Programs"] } },
+      data: { ministryId: childrensId },
+    });
+  }
+
   console.log(`\n✅ Seed complete! ShepherdOS is ready.\n`);
   console.log(`   Admin login: admin@praisecathedral.org / admin1234`);
 }
