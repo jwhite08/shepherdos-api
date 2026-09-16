@@ -40,6 +40,7 @@ model Organization {
   portalInvites  PortalInvite[]
   volunteers     Volunteer[]
   volunteerSchedules VolunteerSchedule[]
+  memberPhotos   MemberPhoto[]
 
   @@map("organizations")
 }
@@ -186,9 +187,30 @@ model Member {
   eventRegistrations EventRegistration[]
   portalInvites  PortalInvite[]
   volunteerRecords Volunteer[]
+  photos         MemberPhoto[]
 
   @@unique([organizationId, email])
   @@map("members")
+}
+
+// ─── MemberPhoto ─────────────────────────────────────────────
+// Photos a congregant uploads to their own profile via the Member
+// Portal. Distinct from Member.profilePhotoUrl (a single-avatar field
+// that nothing currently reads or writes) — this is a gallery, and a
+// member can have several.
+
+model MemberPhoto {
+  id             String   @id @default(cuid())
+  organizationId String
+  memberId       String
+  url            String
+  caption        String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  member       Member       @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@map("member_photos")
 }
 
 enum Gender {

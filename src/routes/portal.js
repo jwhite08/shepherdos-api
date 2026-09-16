@@ -4,9 +4,13 @@
 
 import { Router } from "express";
 import jwt        from "jsonwebtoken";
+import fs         from "fs";
 import prisma     from "../lib/prisma.js";
+import { memberPhotoUpload, absolutePathForPhotoUrl } from "../lib/upload.js";
 
 const router = Router();
+
+const MAX_PHOTOS_PER_MEMBER = 12;
 
 // ─── Member auth middleware (portal-specific) ─────────────────
 function requireMember(req, res, next) {
@@ -46,11 +50,71 @@ router.get("/profile", async (req, res) => {
           },
         },
       },
+      photos: { orderBy: { createdAt: "desc" } },
     },
   });
 
   if (!member) return res.status(404).json({ error: "Member record not found." });
   res.json(member);
+});
+
+// ─── POST /api/portal/profile/photos ──────────────────────────
+// A member uploads one or more photos to their own gallery.
+router.post("/profile/photos", (req, res, next) => {
+  memberPhotoUpload.array("photos", 5)(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}, async (req, res) => {
+  const { memberId, organizationId } = req.user;
+  const files = req.files || [];
+
+  if (files.length === 0) {
+    return res.status(400).json({ error: "No photos were uploaded." });
+  }
+
+  const existingCount = await prisma.memberPhoto.count({ where: { memberId } });
+  if (existingCount + files.length > MAX_PHOTOS_PER_MEMBER) {
+    // Files are already written to disk by multer at this point — clean up
+    // before rejecting so a failed upload never leaves orphaned files.
+    files.forEach(f => fs.unlink(f.path, () => {}));
+    return res.status(400).json({
+      error: `You can have at most ${MAX_PHOTOS_PER_MEMBER} photos. You have ${existingCount} and tried to add ${files.length}.`,
+    });
+  }
+
+  const photos = await prisma.$transaction(
+    files.map(f => prisma.memberPhoto.create({
+      data: {
+        organizationId,
+        memberId,
+        url: `/uploads/member-photos/${organizationId}/${memberId}/${f.filename}`,
+      },
+    }))
+  );
+
+  res.status(201).json({ photos });
+});
+
+// ─── DELETE /api/portal/profile/photos/:photoId ───────────────
+router.delete("/profile/photos/:photoId", async (req, res) => {
+  const { memberId } = req.user;
+  const { photoId } = req.params;
+
+  const photo = await prisma.memberPhoto.findUnique({ where: { id: photoId } });
+  // Members may only delete their own photos — checked explicitly rather
+  // than trusting the id alone, since a photo id from another member's
+  // gallery would otherwise be deletable by guessing/enumerating ids.
+  if (!photo || photo.memberId !== memberId) {
+    return res.status(404).json({ error: "Photo not found." });
+  }
+
+  await prisma.memberPhoto.delete({ where: { id: photoId } });
+  fs.unlink(absolutePathForPhotoUrl(photo.url), (err) => {
+    if (err) console.warn(`[portal] Failed to remove photo file: ${photo.url}`, err.message);
+  });
+
+  res.json({ message: "Photo deleted." });
 });
 
 // ─── PATCH /api/portal/profile ────────────────────────────────
